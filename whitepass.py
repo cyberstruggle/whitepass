@@ -4,6 +4,7 @@ import argparse
 import sys
 import os
 import requests
+import random
 import concurrent.futures
 import threading
 import time
@@ -30,16 +31,20 @@ KNOWN_PAYLOADS_PATH = "./db/known_payloads.txt"
 KNOWN_HEADERS_PATH = "./db/headers.txt"
 DEFAULT_THREADS = 50
 ALL_PAYLOADS = None
+PROXIES_LIST = []
 
 def start_whitepass(url=None,method="get",data={},headers={}):
     request_headers = {'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36'}
     request_headers.update(headers)
     request_data = {}
+    proxies = {}
     request_data.update(data)
     request_func = None
     bad_http = [400,500,407,408,405,429]
     content_len = 0
     http_status = 200
+    http_timeout = 120
+
     try:
         request_func = getattr(requests, method.lower())
     except Exception as e:
@@ -48,26 +53,35 @@ def start_whitepass(url=None,method="get",data={},headers={}):
 
     def do_request(payload={}):
         try:
+            reqproxies = {}
+            pxomsg = ""
+            if len(PROXIES_LIST):
+                reqproxies = random.choice(PROXIES_LIST)
             headers = request_headers.copy()
             headers.update(payload)
-            req = request_func(url,headers=headers,data=data,timeout=120)
+            req = request_func(url,headers=headers,data=data,timeout=http_timeout,proxies=reqproxies)
             reqc = req.headers.get('Content-Length',0)
+            if len(PROXIES_LIST):
+                pxomsg = f" via ({reqproxies['http']})"
+            else:
+                pxomsg = f" via localhost "
+
             if not reqc == content_len and (not int(req.status_code) in bad_http):
-                print(f"[+] Response with Diffrent Content-Length Using Header : {payload}")
+                print(f"[+] {pxomsg} Response with Diffrent Content-Length Using Header : {payload}")
             if not http_status == req.status_code and (not int(req.status_code) in bad_http):
-                print(f"[+] Response with Diffrent HTTP-Status Using Header : {payload}")
+                print(f"[+] {pxomsg} Response with Diffrent HTTP-Status Using Header : {payload}")
             return req
         except Exception as e:
             pass
 
     #testing stage 
     try:
-        req0 = request_func(url,headers=headers,data=data,timeout=120)
+        req0 = request_func(url,headers=headers,data=data,timeout=http_timeout)
         req0c = req0.headers.get('Content-Length',0)
         data.update({'test':str('A'*50)})
-        req1 = request_func(url,headers=headers,data=data,timeout=120)
+        req1 = request_func(url,headers=headers,data=data,timeout=http_timeout)
         req1c = req1.headers.get('Content-Length',0)
-        req2 = request_func(url,headers=headers,params=data,timeout=120)
+        req2 = request_func(url,headers=headers,params=data,timeout=http_timeout)
         req2c = req2.headers.get('Content-Length',0)
         data.update({'test':str('A'*100)})
         req3 = request_func(url,headers=headers,params=data,timeout=120)
@@ -115,7 +129,7 @@ def start_whitepass(url=None,method="get",data={},headers={}):
 def whitepass(request_options=None,target_options=None,payload_options=None):
 
     global KNOWN_PAYLOADS_PATH,KNOWN_HEADERS_PATH,DEFAULT_THREADS
-    global ALL_PAYLOADS
+    global ALL_PAYLOADS,PROXIES_LIST
     parsed_request = None
     additionalrequest_headers = {}
     additionalrequest_data    = {}
@@ -128,6 +142,7 @@ def whitepass(request_options=None,target_options=None,payload_options=None):
     request_data        = request_options.get('data',None)
     known_ips           = payload_options['known_ips']
     additionalheaders   = payload_options['additionalheaders']
+    proxylist           = payload_options['proxylist']
     additionalpayloads  = payload_options['additionalpayloads']
     threads             = payload_options.get('threads',DEFAULT_THREADS)
     if threads:
@@ -143,6 +158,16 @@ def whitepass(request_options=None,target_options=None,payload_options=None):
         additionalrequest_data = {x[0] : x[1] for x in [x.split("=") for x in request_data[1:].split("&") ]}
 
 
+    if proxylist:
+        if os.path.exists(proxylist):
+            for p in open(proxylist,'r').readlines():
+                p = p.replace('\n', '')
+                g = p.split(':')
+                proxy_object = {
+                    'http': f'http://{g[0]}:{g[1]}',
+                    'https': f'http://{g[0]}:{g[1]}',
+                }
+                PROXIES_LIST.append(proxy_object)
 
     payloads = prepre_payloads(known_ips=known_ips,known_payloads_path=KNOWN_PAYLOADS_PATH,
                                 additionalpayloads=additionalpayloads)
@@ -219,6 +244,8 @@ def main():
         help="Load Extra header(s) keys from text file")
     payload_option.add_argument("-aP", "--payloads", dest="additionalpayloads",
         help="Load Extra payload(s) from text file")
+    payload_option.add_argument("-aL", "--proxies", dest="proxylist",
+        help="Load proxies from text file ip:port")
     payload_option.add_argument("--ips", dest="known_ips",
         help="Known External/Internal IPs for the target comma separated (e.g. \"10.10.1.5,140.82.118.3\")")
     payload_option.add_argument("--threads", dest="threads", type=int,
@@ -244,6 +271,7 @@ def main():
         payload_options = {
             'additionalheaders':args.additionalheaders,
             'additionalpayloads':args.additionalpayloads,
+            'proxylist':args.proxylist,
             'known_ips':args.known_ips,
             'threads':args.threads,
         }
